@@ -1,6 +1,6 @@
-# WorkTime Pro - 个人工时记录助手 ⏳
+# WorkTime Pro - 个人工作时长记录助手 ⏳
 
-**WorkTime Pro** 是一款基于 Python (Tkinter + ttkbootstrap) 的桌面工时记录工具，专为工业自动化工程师及办公人员设计。它支持自动扣除午休时间、工时取整计算（0.5h）以及开机自启功能。
+**WorkTime Pro** 是一款基于 Python (Tkinter + ttkbootstrap) 的桌面记录工具，专为工程师及办公人员设计。它支持自动扣除午休时间、工时取整计算（0.5h）以及开机自启功能。
 
 ## ✨ 主要功能
 
