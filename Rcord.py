@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 import sqlite3
 import calendar
 import re
@@ -10,6 +10,14 @@ import json
 import winreg
 from datetime import datetime, timedelta, date
 import warnings
+import pandas as pd # 必须安装 pandas
+
+# 尝试引入 openpyxl 用于美化 Excel
+try:
+    from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+    from openpyxl.utils import get_column_letter
+except ImportError:
+    pass 
 
 # 忽略警告
 warnings.filterwarnings("ignore")
@@ -95,6 +103,11 @@ class WorkAppPro(ttk.Window):
         self.var_status_text = tk.StringVar(value="早安")
         self.var_autostart = tk.BooleanVar(value=self.config.get("auto_start", False))
         
+        # 考勤计算相关变量
+        self.calc_df = None
+        self.calc_names = []
+        self.res_df = None # 存储计算结果
+
         self.init_db()
         self.setup_ui()
         self.refresh_main_data()
@@ -226,11 +239,8 @@ class WorkAppPro(ttk.Window):
         header = ttk.Frame(self, padding=(15, 10))
         header.pack(fill="x")
         
-        # 🟢 1. 将按钮保存为 self 属性，以便后续定位菜单
         self.btn_setting = ttk.Button(header, image=self.imgs.get("settings"), bootstyle="link-dark", width=3)
         self.btn_setting.pack(side="left")
-        
-        # 🟢 2. 绑定新的自定义菜单函数
         self.btn_setting.configure(command=self.open_setting_menu)
 
         ttk.Button(header, text=" 月度记录", image=self.imgs.get("calendar"), compound="left", 
@@ -292,38 +302,29 @@ class WorkAppPro(ttk.Window):
                                    command=self.handle_main_action, bootstyle="success")
         self.btn_main.pack(fill="x", ipady=12)
 
-
-    # 🟢【最终版】深色悬浮菜单：灰色边框 + 紧凑布局 + 无悬停变色
     def open_setting_menu(self):
-        # 1. 如果菜单已存在，先关闭
         if hasattr(self, 'menu_win') and self.menu_win.winfo_exists():
             self.menu_win.destroy()
             return
 
-        # 2. 定义深色皮肤配色
-        BG_COLOR = "#2c2c2e"       # 菜单主背景 (深灰)
-        FG_COLOR = "#ffffff"       # 纯白文字
-        DIVIDER_COLOR = "#48484a"  # 分割线颜色
-        # 🟢 修改点：将边框改为明显的灰色
+        BG_COLOR = "#2c2c2e"       
+        FG_COLOR = "#ffffff"       
+        DIVIDER_COLOR = "#48484a"  
         BORDER_COLOR = "#8e8e93"   
-        TOGGLE_ON_COLOR = "#34c759" # 开关开启 (绿)
-        TOGGLE_OFF_COLOR = "#636366"# 开关关闭 (灰)
+        TOGGLE_ON_COLOR = "#34c759" 
+        TOGGLE_OFF_COLOR = "#636366"
 
-        # 3. 创建无边框窗口
         self.menu_win = tk.Toplevel(self)
-        self.menu_win.overrideredirect(True)       # 去除标题栏
-        self.menu_win.attributes('-topmost', True) # 始终置顶
+        self.menu_win.overrideredirect(True)       
+        self.menu_win.attributes('-topmost', True) 
         self.menu_win.configure(bg=BG_COLOR)
 
-        # 🟢 边框容器：背景设为灰色(BORDER_COLOR)，padding=1 形成 1px 边框
         main_container = tk.Frame(self.menu_win, bg=BORDER_COLOR, padx=1, pady=1)
         main_container.pack(fill="both", expand=True)
         
-        # 内容容器：背景设为深色(BG_COLOR)
         content_frame = tk.Frame(main_container, bg=BG_COLOR)
         content_frame.pack(fill="both", expand=True)
 
-        # 内部类：自定义手绘开关
         class CanvasToggle(tk.Canvas):
             def __init__(self, parent, variable, command=None, bg=BG_COLOR):
                 super().__init__(parent, width=44, height=24, bg=bg, highlightthickness=0, bd=0, cursor="hand2")
@@ -336,11 +337,9 @@ class WorkAppPro(ttk.Window):
                 self.delete("all")
                 is_on = self.var.get()
                 fill_color = TOGGLE_ON_COLOR if is_on else TOGGLE_OFF_COLOR
-                # 绘制轨道
                 self.create_oval(1, 1, 23, 23, fill=fill_color, outline=fill_color) 
                 self.create_rectangle(12, 1, 32, 23, fill=fill_color, outline=fill_color)
                 self.create_oval(21, 1, 43, 23, fill=fill_color, outline=fill_color)
-                # 绘制滑块
                 cx = 32 if is_on else 12
                 self.create_oval(cx-10, 2, cx+10, 22, fill="#ffffff", outline="")
 
@@ -349,33 +348,26 @@ class WorkAppPro(ttk.Window):
                 self.render()
                 if self.cmd: self.cmd()
 
-        # --- 通用菜单行创建函数 ---
         def create_row(icon_key, text, is_toggle=False, toggle_var=None, command=None, text_color=FG_COLOR):
-            # 紧凑行高
             row = tk.Frame(content_frame, bg=BG_COLOR, height=35)
             row.pack(fill="x")
             
-            # 紧凑内边距
             inner = tk.Frame(row, bg=BG_COLOR, padx=10, pady=5)
             inner.pack(fill="both", expand=True)
 
-            # 1. 图标
             if icon_key and self.imgs.get(icon_key):
                 lbl_icon = tk.Label(inner, image=self.imgs.get(icon_key), bg=BG_COLOR, bd=0)
                 lbl_icon.pack(side="left", padx=(0, 8))
             
-            # 2. 文字
             lbl_text = tk.Label(inner, text=text, font=("Microsoft YaHei UI", 9), 
                                 fg=text_color, bg=BG_COLOR, bd=0)
             lbl_text.pack(side="left")
 
-            # 3. 右侧控件
             toggle_btn = None
             if is_toggle and toggle_var:
                 toggle_btn = CanvasToggle(inner, variable=toggle_var, command=command, bg=BG_COLOR)
                 toggle_btn.pack(side="right")
             
-            # 点击交互
             def on_click(e):
                 if is_toggle and toggle_btn:
                     toggle_btn.toggle()
@@ -389,19 +381,24 @@ class WorkAppPro(ttk.Window):
 
             return row
 
-        # --- 菜单内容 ---
         create_row("flash", "开机自启", is_toggle=True, toggle_var=self.var_autostart, command=self.toggle_autostart)
         
-        # 分割线
         tk.Frame(content_frame, bg=DIVIDER_COLOR, height=1).pack(fill="x", padx=10)
 
-        # 清空数据
+        # 🟢 新增：考勤计算入口
+        def open_calc():
+            self.menu_win.destroy()
+            self.open_calc_window() 
+            
+        create_row("calendar", "考勤计算", is_toggle=False, command=open_calc)
+
+        tk.Frame(content_frame, bg=DIVIDER_COLOR, height=1).pack(fill="x", padx=10)
+
         def clean_action():
             self.menu_win.destroy()
             self.reset_database()
         create_row("banana", "清空数据", is_toggle=False, command=clean_action, text_color="#ff6b6b")
 
-        # 4. 窗口定位
         self.menu_win.update_idletasks()
         width = 160
         height = main_container.winfo_reqheight()
@@ -414,7 +411,6 @@ class WorkAppPro(ttk.Window):
             
         self.menu_win.geometry(f"{width}x{height}+{root_x}+{root_y}")
 
-        # 5. 焦点丢失关闭
         def on_focus_out(event):
             if self.menu_win:
                 self.menu_win.destroy()
@@ -422,14 +418,351 @@ class WorkAppPro(ttk.Window):
         self.menu_win.bind("<FocusOut>", on_focus_out)
         self.menu_win.focus_force()
 
-    # 继承 calculate_logic 的逻辑 (含午休扣除 + 0.5h 取整)
+    # ================= 考勤计算扩展功能 =================
+
+    def open_calc_window(self):
+        """打开考勤计算弹窗"""
+        win = ttk.Toplevel(self)
+        win.title("考勤统计导出")
+        self.center_and_show(400, 380, win)
+        
+        self.calc_df = None  
+        self.calc_names = []
+        self.res_df = None # 🟢 存储计算结果
+        
+        var_path = tk.StringVar(value="请导入Excel文件...")
+        var_selected_name = tk.StringVar()
+
+        container = ttk.Frame(win, padding=20)
+        container.pack(fill="both", expand=True)
+
+        ttk.Label(container, text="1. 导入原始表格", bootstyle="primary", font=FONT_BOLD).pack(anchor="w", pady=(0, 10))
+        
+        # 🟢 重置按钮状态的辅助函数
+        def reset_btn_state(enable=True):
+            if enable:
+                btn_action.configure(text="开始计算", state="normal", command=btn_calculate_action, bootstyle="primary")
+            else:
+                btn_action.configure(text="请先导入文件", state="disabled", bootstyle="secondary")
+            self.res_df = None
+
+        def btn_import_action():
+            file_path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
+            win.lift()
+            win.focus_force()
+            
+            if file_path:
+                if self.process_excel_data(file_path):
+                    var_path.set(os.path.basename(file_path))
+                    # 更新下拉框
+                    all_options = ["所有人"] + self.calc_names
+                    name_combo['values'] = all_options
+                    if self.calc_names:
+                        name_combo.current(0) 
+                        reset_btn_state(True) # 🟢 导入成功，重置为开始计算
+                    ToastNotification("导入成功", f"包含 {len(self.calc_names)} 名员工数据", bootstyle="success").show_toast()
+
+        f_imp = ttk.Frame(container)
+        f_imp.pack(fill="x", pady=(0, 15))
+        ttk.Button(f_imp, text="选择文件", bootstyle="info-outline", command=btn_import_action).pack(side="left")
+        ttk.Label(f_imp, textvariable=var_path, bootstyle="secondary").pack(side="left", padx=10)
+
+        ttk.Separator(container).pack(fill="x", pady=10)
+
+        ttk.Label(container, text="2. 选择要计算的员工", bootstyle="primary", font=FONT_BOLD).pack(anchor="w", pady=(0, 10))
+        
+        # 🟢 选择变化时重置按钮
+        def on_combo_selected(event):
+            reset_btn_state(True)
+
+        name_combo = ttk.Combobox(container, textvariable=var_selected_name, state="readonly", bootstyle="primary")
+        name_combo.pack(fill="x", pady=(0, 15))
+        name_combo.bind("<<ComboboxSelected>>", on_combo_selected)
+        
+        ttk.Separator(container).pack(fill="x", pady=10)
+        
+        # 🟢 分步逻辑：计算 -> 导出
+        def btn_calculate_action():
+            target = var_selected_name.get()
+            if not target: return
+            
+            # 1. 变更为计算中
+            btn_action.configure(text="计算中...", state="disabled")
+            btn_action.update_idletasks() # 强制刷新UI
+            
+            # 2. 执行计算
+            success = self.perform_calculation(target)
+            
+            # 3. 计算完成，变更为导出
+            if success:
+                btn_action.configure(text="导出表格", state="normal", command=btn_export_action, bootstyle="success")
+            else:
+                # 失败复原
+                reset_btn_state(True)
+
+        def btn_export_action():
+            if self.res_df is None or self.res_df.empty: return
+            
+            # 1. 变更为导出中
+            btn_action.configure(text="导出中...", state="disabled")
+            btn_action.update_idletasks()
+            
+            # 2. 执行导出
+            success = self.save_to_excel(var_selected_name.get())
+            
+            # 3. 恢复为导出
+            btn_action.configure(text="导出表格", state="normal")
+            if success:
+                ToastNotification("导出完成", "文件已保存", bootstyle="success").show_toast()
+
+        # 初始按钮（共用同一个按钮对象）
+        btn_action = ttk.Button(container, text="请先导入文件", bootstyle="secondary", state="disabled", command=btn_calculate_action)
+        btn_action.pack(fill="x", ipady=8)
+
+    def process_excel_data(self, file_path):
+        """读取并校验Excel数据"""
+        try:
+            df = pd.read_excel(file_path, dtype=str)
+            df.columns = df.columns.str.strip()
+            
+            # 🟢 增加校验 '登记号码'
+            required_cols = {'姓名', '日期', '时间', '登记号码'}
+            if not required_cols.issubset(df.columns):
+                missing = required_cols - set(df.columns)
+                messagebox.showerror("格式错误", f"表格缺少以下列：\n{missing}\n\n请确保表头包含：姓名、日期、时间、登记号码")
+                return False
+            
+            df.dropna(subset=['姓名', '日期', '时间'], inplace=True)
+            self.calc_df = df
+            self.calc_names = sorted(df['姓名'].unique().tolist())
+            return True
+            
+        except Exception as e:
+            messagebox.showerror("读取错误", f"文件读取失败：\n{str(e)}")
+            return False
+
+    def perform_calculation(self, target_name):
+        """执行计算逻辑，生成 self.res_df"""
+        try:
+            # 1. 数据准备
+            full_df_copy = self.calc_df.copy()
+            full_df_copy['日期'] = pd.to_datetime(full_df_copy['日期'])
+            
+            def clean_time(t_str):
+                s = str(t_str).strip()
+                try:
+                    return pd.to_datetime(s).strftime('%H:%M')
+                except:
+                    if hasattr(t_str, 'strftime'):
+                        return t_str.strftime('%H:%M')
+                    return s[:5] 
+
+            full_df_copy['fmt_time'] = full_df_copy['时间'].apply(clean_time)
+            # 排序
+            full_df_copy.sort_values(by=['姓名', '日期', 'fmt_time'], inplace=True)
+
+            if full_df_copy.empty:
+                return False
+
+            # 2. 全局日期范围
+            min_date = full_df_copy['日期'].min()
+            max_date = full_df_copy['日期'].max()
+            start_date = min_date.replace(day=1)
+            _, last_day_num = calendar.monthrange(max_date.year, max_date.month)
+            end_date = max_date.replace(day=last_day_num)
+            full_date_range = pd.date_range(start=start_date, end=end_date)
+
+            # 3. 确定处理对象
+            if target_name == "所有人":
+                users_to_process = self.calc_names
+            else:
+                users_to_process = [target_name]
+
+            # 建立 姓名->登记号码 映射 (取第一条记录即可)
+            # 假设一个姓名对应一个登记号码，若有变动取最后一个
+            user_reg_map = full_df_copy.drop_duplicates(subset=['姓名'], keep='last').set_index('姓名')['登记号码'].to_dict()
+
+            # 4. 计算核心函数
+            def calculate_daily_hours(punches_str_list):
+                if len(punches_str_list) not in [2, 4]:
+                    return ""
+
+                fmt = "%H:%M"
+                dummy_date = datetime(2000, 1, 1)
+
+                # 4次打卡校验规则：中间两次必须在 11:30 - 13:30
+                if len(punches_str_list) == 4:
+                    t_p2_str = punches_str_list[1]
+                    t_p3_str = punches_str_list[2]
+                    try:
+                        t_p2 = datetime.strptime(t_p2_str, fmt).replace(year=2000, month=1, day=1)
+                        t_p3 = datetime.strptime(t_p3_str, fmt).replace(year=2000, month=1, day=1)
+                        limit_start = dummy_date.replace(hour=11, minute=30, second=0)
+                        limit_end = dummy_date.replace(hour=13, minute=30, second=0)
+                        
+                        if not (limit_start <= t_p2 <= limit_end and limit_start <= t_p3 <= limit_end):
+                            return ""
+                    except:
+                        return ""
+
+                t_first_str = punches_str_list[0]
+                t_last_str = punches_str_list[-1]
+                
+                t_first = datetime.strptime(t_first_str, fmt).replace(year=2000, month=1, day=1)
+                t_last = datetime.strptime(t_last_str, fmt).replace(year=2000, month=1, day=1)
+                
+                m = t_first.minute
+                if m <= 5:
+                    adj_start = t_first.replace(minute=0, second=0)
+                elif m <= 35:
+                    adj_start = t_first.replace(minute=30, second=0)
+                else:
+                    adj_start = (t_first + timedelta(hours=1)).replace(minute=0, second=0)
+                
+                if t_last < adj_start:
+                    return "异常" 
+                
+                raw_duration_sec = (t_last - adj_start).total_seconds()
+                duration_hours = raw_duration_sec / 3600.0
+                
+                lunch_start = dummy_date.replace(hour=12, minute=0, second=0)
+                lunch_end = dummy_date.replace(hour=13, minute=0, second=0)
+                
+                if adj_start <= lunch_start and t_last >= lunch_end:
+                    duration_hours -= 1.0
+                
+                final_hours = math.floor(max(0, duration_hours) * 2) / 2.0
+                return final_hours
+
+            # 5. 遍历计算
+            all_result_rows = []
+            self.global_max_punches = 0 
+            week_map = {0:"星期一", 1:"星期二", 2:"星期三", 3:"星期四", 4:"星期五", 5:"星期六", 6:"星期日"}
+
+            for user in users_to_process:
+                user_df = full_df_copy[full_df_copy['姓名'] == user]
+                grouped_data = user_df.groupby(user_df['日期'].dt.date)['fmt_time'].apply(list).to_dict()
+                reg_num = user_reg_map.get(user, "")
+
+                for date_idx in full_date_range:
+                    curr_date = date_idx.date() 
+                    punches = grouped_data.get(curr_date, [])
+                    
+                    daily_duration = calculate_daily_hours(punches)
+                    
+                    overtime_duration = ""
+                    absence_duration = ""
+                    
+                    if isinstance(daily_duration, (int, float)):
+                        diff = daily_duration - DAILY_NET_HOURS
+                        if diff > 0:
+                            overtime_duration = diff
+                        elif diff < 0:
+                            absence_duration = diff 
+                    
+                    row = {
+                        '登记号码': reg_num, # 🟢 增加登记号码
+                        '姓名': user,
+                        '日期': curr_date.strftime("%Y-%m-%d"), 
+                        '星期': week_map[curr_date.weekday()],
+                        '考勤时长': daily_duration, 
+                        '加班时长': overtime_duration, 
+                        '缺勤时长': absence_duration  
+                    }
+                    
+                    for i, t in enumerate(punches):
+                        row[f'第{i+1}次打卡'] = t
+                    
+                    self.global_max_punches = max(self.global_max_punches, len(punches))
+                    all_result_rows.append(row)
+
+            # 6. 生成结果 DataFrame 并排序
+            self.res_df = pd.DataFrame(all_result_rows)
+            # 🟢 排序：先按登记号码，再按日期
+            self.res_df.sort_values(by=['登记号码', '日期'], inplace=True)
+            return True
+
+        except Exception as e:
+            messagebox.showerror("计算错误", f"计算过程中出错：\n{str(e)}")
+            return False
+
+    def save_to_excel(self, target_name_label):
+        """将 self.res_df 保存为 Excel"""
+        try:
+            # 整理列顺序
+            # 🟢 登记号码 排第一
+            punch_cols = [f'第{i+1}次打卡' for i in range(self.global_max_punches)]
+            cols = ['登记号码', '姓名', '日期', '星期'] + punch_cols + ['考勤时长', '加班时长', '缺勤时长']
+            
+            for c in cols:
+                if c not in self.res_df.columns:
+                    self.res_df[c] = ""
+            
+            final_df = self.res_df[cols]
+
+            file_prefix = "全员" if target_name_label == "所有人" else target_name_label
+            save_path = filedialog.asksaveasfilename(
+                defaultextension=".xlsx",
+                filetypes=[("Excel files", "*.xlsx")],
+                initialfile=f"{file_prefix}_考勤统计.xlsx"
+            )
+            
+            if save_path:
+                try:
+                    with pd.ExcelWriter(save_path, engine='openpyxl') as writer:
+                        final_df.to_excel(writer, index=False, sheet_name='考勤记录')
+                        
+                        if 'openpyxl' in sys.modules:
+                            workbook = writer.book
+                            worksheet = writer.sheets['考勤记录']
+                            
+                            font_body = Font(name='微软雅黑', size=10)
+                            font_header = Font(name='微软雅黑', size=10, bold=True)
+                            align_center = Alignment(horizontal='center', vertical='center')
+                            thin_border = Border(left=Side(style='thin'), right=Side(style='thin'),
+                                                 top=Side(style='thin'), bottom=Side(style='thin'))
+                            header_fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+
+                            for row in worksheet.iter_rows():
+                                for cell in row:
+                                    cell.alignment = align_center
+                                    cell.border = thin_border
+                                    if cell.row == 1:
+                                        cell.font = font_header
+                                        cell.fill = header_fill
+                                    else:
+                                        cell.font = font_body
+                            
+                            # 调整列宽
+                            worksheet.column_dimensions['A'].width = 15 # 登记号码
+                            worksheet.column_dimensions['B'].width = 12 # 姓名
+                            worksheet.column_dimensions['C'].width = 15 # 日期
+                            worksheet.column_dimensions['D'].width = 10 # 星期
+                            
+                            col_len = len(cols)
+                            worksheet.column_dimensions[get_column_letter(col_len-2)].width = 12
+                            worksheet.column_dimensions[get_column_letter(col_len-1)].width = 12
+                            worksheet.column_dimensions[get_column_letter(col_len)].width = 12
+
+                except ImportError:
+                    final_df.to_excel(save_path, index=False)
+
+                try: os.startfile(save_path)
+                except: pass
+                return True
+            return False
+
+        except Exception as e:
+            messagebox.showerror("导出错误", f"保存文件时出错：\n{str(e)}")
+            return False
+
+    # ================= 原有逻辑保持不变 =================
+
     def update_realtime_duration(self):
         if self.is_working and self.current_start_dt:
             now = datetime.now()
-            # 1. 计算原始总秒数
             total_sec = (now - self.current_start_dt).total_seconds()
             
-            # 2. 计算午休扣除时长
             l_s = datetime.strptime(f"{self.today_date} {LUNCH_START}", "%Y-%m-%d %H:%M")
             l_e = datetime.strptime(f"{self.today_date} {LUNCH_END}", "%Y-%m-%d %H:%M")
             
@@ -440,13 +773,8 @@ class WorkAppPro(ttk.Window):
             if overlap_end > overlap_start:
                 deduction_sec = (overlap_end - overlap_start).total_seconds()
             
-            # 3. 计算净工时 (小时)
             raw_net_hours = max(0, (total_sec - deduction_sec) / 3600.0)
-            
-            # 4. 执行取整逻辑：向下取整到 0.5 (例如 1.6 -> 1.5, 1.9 -> 1.5)
-            # 公式：floor(hours * 2) / 2
             display_hours = math.floor(raw_net_hours * 2) / 2.0
-            
             self.var_worked.set(f"{display_hours:.1f}h")
 
     def start_clock_loop(self):
@@ -455,10 +783,7 @@ class WorkAppPro(ttk.Window):
         weeks = ["周一","周二","周三","周四","周五","周六","周日"]
         self.var_time.set(now.strftime("%H:%M"))
         self.var_date.set(f"{now.strftime('%Y-%m-%d')}  {weeks[now.weekday()]}")
-        
-        # 实时更新计算
         self.update_realtime_duration()
-        
         self.after(1000, self.start_clock_loop)
 
     def refresh_main_data(self):
@@ -512,7 +837,14 @@ class WorkAppPro(ttk.Window):
         if count >= 6: self.btn_mid.configure(state="disabled")
         else: self.btn_mid.configure(state="normal")
         self.lbl_icon.configure(image=self.imgs.get("working")) 
-        self.var_status_text.set("工作中\n静待干饭")
+
+        current_hour = datetime.now().hour
+        
+        if current_hour >= 13:
+            self.var_status_text.set("工作中\n等待下班")
+        else:
+            self.var_status_text.set("工作中\n等待干饭")
+
         self.msg_box.configure(bootstyle="warning") 
         self.msg_lbl_title.configure(bootstyle="warning")
         self.lbl_text.configure(bootstyle="warning")
@@ -682,8 +1014,6 @@ class WorkAppPro(ttk.Window):
         cal_win.withdraw()
         cal_win.title("月度记录")
 
-        # 🟢 移除了之前的 style.configure 代码，使用内置 danger 样式
-
         nav = ttk.Frame(cal_win, padding=10)
         nav.pack(fill="x")
         ttk.Button(nav, text="◀", command=lambda: chg(-1), bootstyle="outline-dark", width=4).pack(side="left")
@@ -703,21 +1033,38 @@ class WorkAppPro(ttk.Window):
         stats_frame = ttk.Labelframe(cal_win, text=" 当月统计 ", padding=10, bootstyle="info")
         stats_frame.pack(fill="x", padx=10, pady=10)
         
+        # --- 1. 应出勤 ---
         f_req = ttk.Frame(stats_frame); f_req.pack(side="left", expand=True)
         ttk.Label(f_req, text="应出勤", font=("微软雅黑", 9), bootstyle="secondary").pack()
         lbl_stat_req = ttk.Label(f_req, text="0h", font=FONT_BOLD, bootstyle="dark"); lbl_stat_req.pack()
         ttk.Separator(stats_frame, orient="vertical").pack(side="left", fill="y", padx=5)
         
+        # --- 2. 合计出勤 ---
         f_act = ttk.Frame(stats_frame); f_act.pack(side="left", expand=True)
-        ttk.Label(f_act, text="已出勤", font=("微软雅黑", 9), bootstyle="secondary").pack()
+        ttk.Label(f_act, text="合计出勤", font=("微软雅黑", 9), bootstyle="secondary").pack()
         lbl_stat_act = ttk.Label(f_act, text="0h", font=FONT_BOLD, bootstyle="success"); lbl_stat_act.pack()
         ttk.Separator(stats_frame, orient="vertical").pack(side="left", fill="y", padx=5)
         
+        # --- 3. 缺勤 ---
         f_abs = ttk.Frame(stats_frame); f_abs.pack(side="left", expand=True)
         ttk.Label(f_abs, text="缺  勤", font=("微软雅黑", 9), bootstyle="secondary").pack()
         lbl_stat_abs = ttk.Label(f_abs, text="0h", font=FONT_BOLD, bootstyle="danger"); lbl_stat_abs.pack()
+
+        # --- 4. 加班 ---
+        ttk.Separator(stats_frame, orient="vertical").pack(side="left", fill="y", padx=5)
+        f_ot = ttk.Frame(stats_frame); f_ot.pack(side="left", expand=True)
+        ttk.Label(f_ot, text="加  班", font=("微软雅黑", 9), bootstyle="secondary").pack()
+        lbl_stat_ot = ttk.Label(f_ot, text="0h", font=FONT_BOLD, bootstyle="warning"); lbl_stat_ot.pack()
+
+        # --- 5. 可调休 (新增部分) ---
+        ttk.Separator(stats_frame, orient="vertical").pack(side="left", fill="y", padx=5)
+        f_bal = ttk.Frame(stats_frame); f_bal.pack(side="left", expand=True)
+        ttk.Label(f_bal, text="可调休", font=("微软雅黑", 9), bootstyle="secondary").pack()
+        # 默认显示 0h，颜色稍后在 render 中动态设置
+        lbl_stat_bal = ttk.Label(f_bal, text="0h", font=FONT_BOLD, bootstyle="info"); lbl_stat_bal.pack()
         
         self.cal_year, self.cal_month = datetime.now().year, datetime.now().month
+        
         def render():
             for w in grid.winfo_children(): w.destroy()
             lbl_title.config(text=f"{self.cal_year}年 {self.cal_month}月")
@@ -729,7 +1076,12 @@ class WorkAppPro(ttk.Window):
             recs = {r[0]: {'punches':r[1], 'duration':r[2], 'type':r[3], 'status':r[4]} for r in rows}
             cal_data = calendar.monthcalendar(self.cal_year, self.cal_month)
             today_str = date.today().strftime("%Y-%m-%d")
-            total_req, total_act, total_absent = 0.0, 0.0, 0.0
+            
+            # 初始化统计变量
+            total_req = 0.0
+            total_actual_raw = 0.0 
+            total_absent = 0.0
+            total_ot = 0.0
             
             for r, week in enumerate(cal_data):
                 grid.rowconfigure(r, weight=1)
@@ -741,15 +1093,25 @@ class WorkAppPro(ttk.Window):
                     is_sunday = (c == 6)
                     is_work_day_default = not is_sunday
                     should_count_req = is_work_day_default
+                    
                     if rec:
                         if rec['type'] == 1: should_count_req = False
                         elif rec['type'] in [2, 3]: should_count_req = True
                         elif rec['type'] == 0: should_count_req = True
+                    
                     if should_count_req: total_req += DAILY_NET_HOURS
+                    
                     day_dur = rec['duration'] if rec else 0.0
-                    total_act += day_dur
+                    total_actual_raw += day_dur
+                    
+                    # --- 计算缺勤 ---
                     if d_str < today_str and should_count_req:
-                        total_absent += max(0, DAILY_NET_HOURS - day_dur)
+                        day_absent = max(0, DAILY_NET_HOURS - day_dur)
+                        total_absent += day_absent
+                        
+                    # --- 计算加班 ---
+                    day_ot = max(0, day_dur - DAILY_NET_HOURS)
+                    total_ot += day_ot
                         
                     bg, txt = "light", str(d)
                     if rec:
@@ -770,7 +1132,6 @@ class WorkAppPro(ttk.Window):
                                     bg = "primary"
                     else:
                         if d_str < today_str and is_work_day_default: 
-                            # 🟢 核心修改：直接使用内置 danger 样式 (实心红)
                             bg, txt = "danger", f"{d}\n缺"
                         elif is_sunday: bg = "secondary-outline"
                     
@@ -783,9 +1144,24 @@ class WorkAppPro(ttk.Window):
 
                     btn = ttk.Button(grid, text=txt, bootstyle=bg, command=lambda x=d_str: self.open_edit_dialog(x, cal_win, render))
                     btn.grid(row=r, column=c, sticky="nsew", padx=1, pady=1)
+            
+            
+            final_display_act = max(0, total_actual_raw - total_absent)
+            
             lbl_stat_req.config(text=f"{total_req:.1f}h")
-            lbl_stat_act.config(text=f"{total_act:.1f}h")
+            lbl_stat_act.config(text=f"{final_display_act:.1f}h")
             lbl_stat_abs.config(text=f"{total_absent:.1f}h")
+            lbl_stat_ot.config(text=f"{total_ot:.1f}h")
+ 
+            # --- 计算并显示可调休 (新增逻辑) ---
+            balance = total_ot - total_absent
+            lbl_stat_bal.config(text=f"{balance:+.1f}h")
+            # 动态颜色：正数为绿色，负数为红色
+            if balance >= 0:
+                lbl_stat_bal.configure(bootstyle="success")
+            else:
+                lbl_stat_bal.configure(bootstyle="danger")
+
         def chg(x):
             self.cal_month += x
             if self.cal_month>12: self.cal_month, self.cal_year = 1, self.cal_year+1
@@ -793,6 +1169,7 @@ class WorkAppPro(ttk.Window):
             render()
         render()
         self.center_and_show(480, 650, cal_win)
+
 
     def open_edit_dialog(self, d_str, parent=None, callback=None):
         win = ttk.Toplevel(parent if parent else self)
